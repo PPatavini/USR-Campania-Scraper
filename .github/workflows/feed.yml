@@ -2,7 +2,7 @@ name: Aggiorna feed USR Campania
 
 on:
   schedule:
-    - cron: "0 */2 * * *"   # ogni 2 ore (UTC)
+    - cron: "0 */1 * * *"   # ogni ora (UTC)
   workflow_dispatch:
 
 permissions:
@@ -30,7 +30,10 @@ jobs:
       - name: Installa dipendenze
         run: pip install -r requirements.txt
 
-      - name: Genera feed
+      - name: Genera feed (+ Telegram se configurato)
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python scraper.py
 
       - name: Configura Pages
