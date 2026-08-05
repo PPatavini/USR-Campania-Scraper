@@ -23,6 +23,7 @@ scraper.py
 requirements.txt
 .github/workflows/feed.yml
 docs/            (verrà creata in automatico al primo run)
+state/seen.json  (verrà creato in automatico: gli avvisi già mandati)
 ```
 
 ### 2. Abilita GitHub Pages
@@ -38,7 +39,11 @@ Questo è l'URL da incollare in qualsiasi lettore RSS (Feedly, NetNewsWire, Thun
 
 ### 3. Lancia la prima volta
 Vai su `Actions` → seleziona il workflow **Aggiorna feed USR Campania** → `Run workflow`.
-Da lì in poi gira da solo ogni 2 ore (puoi cambiare il `cron` in `feed.yml`).
+
+Il workflow parte solo su richiesta (`workflow_dispatch`): la schedulazione è affidata a
+[cron-job.org](https://cron-job.org), che ogni 15 minuti chiama l'API di GitHub
+`POST /repos/<utente>/<repo>/actions/workflows/feed.yml/dispatches` con `{"ref":"main"}`.
+In alternativa puoi rimettere un blocco `schedule:` con un `cron` dentro `feed.yml`.
 
 ### 4. (Opzionale) Telegram
 1. Su Telegram apri **@BotFather** → `/newbot` → ottieni il **token**.
@@ -52,6 +57,13 @@ Da lì in poi gira da solo ogni 2 ore (puoi cambiare il `cron` in `feed.yml`).
 
 Al **primo run con Telegram attivo** il programma registra le notizie già presenti **senza
 inviarle** (così non riempie il canale di vecchi avvisi); da lì pubblica solo le novità.
+
+Chi è già stato mandato sul canale è scritto in `state/seen.json`, che l'Action ricommitta
+sul repo a ogni novità. Ci finiscono **solo gli avvisi effettivamente consegnati**: se
+Telegram rifiuta un messaggio (per esempio per il limite di ~20 messaggi al minuto per
+canale), quell'avviso non viene segnato come inviato e viene ritentato al giro dopo.
+Gli invii sono distanziati di 4 secondi l'uno dall'altro e in caso di `429` lo script
+aspetta il tempo richiesto da Telegram e riprova.
 
 > Non vuoi gestire il pezzo Telegram qui dentro? Puoi anche lasciare solo l'RSS e collegare
 > l'URL del feed a un bot RSS→Telegram esterno (es. @TheFeedReaderBot).
@@ -86,6 +98,30 @@ E aggiungi al workflow, prima del run dello scraper:
           python -m playwright install --with-deps chromium
 ```
 
+## Se il canale Telegram smette di aggiornarsi
+
+Prima cosa da guardare: la scheda `Actions` del repo.
+
+- **I run risultano `cancelled` uno dopo l'altro, senza log.** È capitato a fine luglio
+  2026: un run era rimasto piantato in stato `waiting` sull'ambiente `github-pages` e,
+  con `concurrency.cancel-in-progress: false`, teneva occupata la coda. Ogni run
+  successivo restava in attesa e veniva annullato da quello dopo, all'infinito — quindi
+  né feed né Telegram si aggiornavano, e GitHub non manda notifiche per i run annullati.
+  Ora il workflow usa `cancel-in-progress: true`, così un run bloccato viene annullato
+  dal successivo e la catena riparte da sola. Se dovesse ricapitare, basta annullare a
+  mano il run più vecchio rimasto appeso.
+- **I run sono `failed`.** Guarda il log del passo "Genera feed": di solito è il sito MIM
+  che risponde `403` (vedi la sezione qui sopra) o che ha cambiato struttura.
+- **I run sono verdi ma sul canale non arriva niente.** Nel log cerca la riga
+  `[OK] Telegram: inviati N/M avvisi`: se `N < M` qualche invio è stato rifiutato e verrà
+  ritentato da solo al giro successivo.
+
+### Rimandare avvisi persi
+
+Se qualche avviso non è mai arrivato sul canale, lancia il workflow a mano
+(`Actions` → `Run workflow`) impostando **`resend_last`** al numero di avvisi più recenti
+da rimandare: vengono tolti da `state/seen.json` e ripubblicati al giro successivo.
+
 ## Se non trova nessuna notizia
 Il parser cerca i link che contengono `/web/miur-usr-campania/-/` (lo schema degli articoli
 Liferay). Se la struttura della pagina cambiasse, regola `URL_PATTERN` in cima a `scraper.py`
@@ -99,3 +135,6 @@ Liferay). Se la struttura della pagina cambiasse, regola `URL_PATTERN` in cima a
 | `MAX_ITEMS` | `30` | quante voci tenere nel feed |
 | `FEED_TITLE` / `FEED_DESC` | — | titolo e descrizione del feed |
 | `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | — | attivano la pubblicazione su Telegram |
+| `STATE_FILE` | `state/seen.json` | dove tiene traccia degli avvisi già inviati |
+| `TELEGRAM_INTERVAL` | `4` | secondi di pausa fra un messaggio e l'altro |
+| `RESEND_LAST` | `0` | rimanda gli ultimi N avvisi già inviati (recupero manuale) |
