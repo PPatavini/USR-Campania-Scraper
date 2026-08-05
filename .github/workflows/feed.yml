@@ -2,22 +2,32 @@ name: Aggiorna feed USR Campania
 
 on:
   workflow_dispatch:
+    inputs:
+      resend_last:
+        description: "Rimanda su Telegram gli ultimi N avvisi gia' inviati (0 = nessuno)"
+        required: false
+        default: "0"
 
 permissions:
-  contents: read
+  contents: write   # serve per salvare state/seen.json
   pages: write
   id-token: write
 
+# Un solo run per volta. 'cancel-in-progress: true' e' la parte importante:
+# se un run resta incastrato (a fine luglio 2026 uno e' rimasto in stato
+# "waiting" sull'ambiente github-pages per giorni), quello successivo lo annulla
+# e prosegue. Con 'false' i run si accodavano e venivano annullati a catena
+# senza mai partire, e il canale Telegram restava muto senza segnalare errori.
 concurrency:
-  group: "pages"
-  cancel-in-progress: false
+  group: usr-campania-feed
+  cancel-in-progress: true
 
 jobs:
+  # Scraping e invio su Telegram stanno in un job separato dal deploy: se
+  # GitHub Pages si blocca, le notifiche continuano comunque ad arrivare.
   build:
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
@@ -32,7 +42,21 @@ jobs:
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          RESEND_LAST: ${{ inputs.resend_last }}
         run: python scraper.py
+
+      - name: Salva lo stato degli avvisi inviati
+        run: |
+          if [ -z "$(git status --porcelain state/)" ]; then
+            echo "Nessun nuovo avviso da registrare."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state/
+          git commit -m "Aggiorna stato avvisi inviati [skip ci]"
+          git pull --rebase --autostash origin "$GITHUB_REF_NAME"
+          git push origin "HEAD:$GITHUB_REF_NAME"
 
       - name: Configura Pages
         uses: actions/configure-pages@v5
@@ -42,6 +66,14 @@ jobs:
         with:
           path: docs
 
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
       - name: Pubblica su GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
