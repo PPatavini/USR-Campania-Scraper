@@ -110,11 +110,28 @@ Prima cosa da guardare: la scheda `Actions` del repo.
   Ora il workflow usa `cancel-in-progress: true`, così un run bloccato viene annullato
   dal successivo e la catena riparte da sola. Se dovesse ricapitare, basta annullare a
   mano il run più vecchio rimasto appeso.
-- **I run sono `failed`.** Guarda il log del passo "Genera feed": di solito è il sito MIM
-  che risponde `403` (vedi la sezione qui sopra) o che ha cambiato struttura.
+- **I run sono `failed`.** Guarda *quale* job è fallito. Se è `build`, guarda il log del
+  passo "Genera feed": di solito è il sito MIM che risponde `403` (vedi la sezione qui
+  sopra) o che ha cambiato struttura. Se è `deploy`, è un problema dell'infrastruttura
+  GitHub Pages e non tocca Telegram (vedi sotto).
+- **Il job `deploy` fallisce ma il run resta verde.** È voluto. Il deploy su Pages è
+  marcato `continue-on-error`, perché quando parte gli avvisi sono già stati mandati su
+  Telegram: far fallire il run servirebbe solo a mandarti una mail per un feed che verrà
+  ripubblicato 15 minuti dopo. Se `deploy` fallisce per giorni di fila, allora vale la
+  pena guardarci: il feed RSS è fermo anche se il canale è aggiornato.
 - **I run sono verdi ma sul canale non arriva niente.** Nel log cerca la riga
   `[OK] Telegram: inviati N/M avvisi`: se `N < M` qualche invio è stato rifiutato e verrà
   ritentato da solo al giro successivo.
+
+### Perché i timeout sono così stretti
+
+Il job `build` ha `timeout-minutes: 8`, `deploy` ne ha 5, e `actions/deploy-pages` si
+arrende dopo 3 minuti. Non è pignoleria: nel caso peggiore un run dura 13 minuti, cioè
+meno dei 15 che passano fra un dispatch e l'altro. Se un run sfora, è ancora in corso
+quando arriva il successivo, che lo annulla — e da lì parte una catena in cui nessun run
+arriva più in fondo. È successo il 6 agosto 2026, quando le deployment di Pages restavano
+appese in `deployment_in_progress` per 10 minuti a botta. Se cambi la frequenza del cron
+esterno, ricontrolla che la somma dei timeout ci stia dentro.
 
 ### Rimandare avvisi persi
 

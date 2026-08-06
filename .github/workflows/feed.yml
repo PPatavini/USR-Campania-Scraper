@@ -27,7 +27,7 @@ jobs:
   # GitHub Pages si blocca, le notifiche continuano comunque ad arrivare.
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 8
     steps:
       - uses: actions/checkout@v4
 
@@ -66,10 +66,18 @@ jobs:
         with:
           path: docs
 
+  # La pubblicazione su Pages e' secondaria: quando questo job parte gli avvisi
+  # sono gia' su Telegram. Se l'infrastruttura Pages fa i capricci non ha senso
+  # far fallire il run (e mandare una mail di errore): il feed viene ripubblicato
+  # al dispatch successivo, 15 minuti dopo.
   deploy:
     needs: build
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    continue-on-error: true
+    # Deve chiudersi ben prima del dispatch successivo. Se resta appeso, il run
+    # e' ancora in corso quando arriva quello dopo, che lo annulla: e' cosi' che
+    # il 6 agosto 2026 si e' innescata la catena di run annullati.
+    timeout-minutes: 5
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -77,3 +85,8 @@ jobs:
       - name: Pubblica su GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
+        with:
+          # Piu' corto del timeout del job: cosi' e' l'action ad arrendersi per
+          # prima e fa in tempo ad annullare la deployment lato Pages, invece di
+          # lasciarla appesa in "deployment_in_progress" davanti alle successive.
+          timeout: 180000
