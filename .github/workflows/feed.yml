@@ -23,11 +23,18 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Scraping e invio su Telegram stanno in un job separato dal deploy: se
-  # GitHub Pages si blocca, le notifiche continuano comunque ad arrivare.
+  # Un solo job, di proposito. Tenere il deploy su Pages in un job separato
+  # raddoppiava le macchine da chiedere a GitHub a ogni giro, e il 6 agosto 2026
+  # e' stato proprio questo il punto debole: per ore i job restavano in coda
+  # senza che venisse assegnato un runner. Meno runner si chiedono, meno spesso
+  # capita. Le notifiche restano comunque protette dai problemi di Pages perche'
+  # i passi di pubblicazione stanno in fondo e sono 'continue-on-error'.
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 10
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
 
@@ -58,35 +65,29 @@ jobs:
           git pull --rebase --autostash origin "$GITHUB_REF_NAME"
           git push origin "HEAD:$GITHUB_REF_NAME"
 
+      # Da qui in giu' e' tutta pubblicazione su Pages. A questo punto gli avvisi
+      # sono gia' partiti su Telegram e lo stato e' gia' committato, quindi un
+      # intoppo di Pages non deve far fallire il run: servirebbe solo a mandare
+      # una mail di errore per un feed che viene ripubblicato 15 minuti dopo.
+      # 'continue-on-error' va messo sui singoli passi: a livello di job non
+      # basta, il run risulta 'failure' lo stesso (verificato sul run 2711).
       - name: Configura Pages
+        continue-on-error: true
         uses: actions/configure-pages@v5
 
       - name: Carica la cartella docs
+        continue-on-error: true
         uses: actions/upload-pages-artifact@v3
         with:
           path: docs
 
-  # La pubblicazione su Pages e' secondaria: quando questo job parte gli avvisi
-  # sono gia' su Telegram. Se l'infrastruttura Pages fa i capricci non ha senso
-  # far fallire il run (e mandare una mail di errore): il feed viene ripubblicato
-  # al dispatch successivo, 15 minuti dopo.
-  deploy:
-    needs: build
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    # Limita il passo di deploy quando parte davvero. Non limita l'attesa di un
-    # runner libero: quella non e' governabile dal workflow, GitHub si arrende
-    # da solo dopo una quindicina di minuti.
-    timeout-minutes: 5
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
       - name: Pubblica su GitHub Pages
         id: deployment
+        continue-on-error: true
         uses: actions/deploy-pages@v4
         with:
-          # Piu' corto del timeout del job: cosi' e' l'action ad arrendersi per
-          # prima e fa in tempo ad annullare la deployment lato Pages, invece di
-          # lasciarla appesa in "deployment_in_progress" davanti alle successive.
+          # Senza questo l'action aspetta 10 minuti prima di arrendersi, e il
+          # run e' ancora in corso quando arriva il dispatch successivo, che lo
+          # annulla. Arrendersi prima le fa anche annullare la deployment invece
+          # di lasciarla appesa in "deployment_in_progress" davanti alle altre.
           timeout: 180000
