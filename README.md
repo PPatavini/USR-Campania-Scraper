@@ -110,28 +110,47 @@ Prima cosa da guardare: la scheda `Actions` del repo.
   Ora il workflow usa `cancel-in-progress: true`, così un run bloccato viene annullato
   dal successivo e la catena riparte da sola. Se dovesse ricapitare, basta annullare a
   mano il run più vecchio rimasto appeso.
-- **I run sono `failed`.** Guarda *quale* job è fallito. Se è `build`, guarda il log del
-  passo "Genera feed": di solito è il sito MIM che risponde `403` (vedi la sezione qui
-  sopra) o che ha cambiato struttura. Se è `deploy`, è un problema dell'infrastruttura
-  GitHub Pages e non tocca Telegram (vedi sotto).
-- **Il job `deploy` fallisce ma il run resta verde.** È voluto. Il deploy su Pages è
-  marcato `continue-on-error`, perché quando parte gli avvisi sono già stati mandati su
-  Telegram: far fallire il run servirebbe solo a mandarti una mail per un feed che verrà
-  ripubblicato 15 minuti dopo. Se `deploy` fallisce per giorni di fila, allora vale la
-  pena guardarci: il feed RSS è fermo anche se il canale è aggiornato.
+- **Il run è `failed`.** Guarda *quale passo* è fallito. Se è "Genera feed", di solito è
+  il sito MIM che risponde `403` (vedi la sezione qui sopra) o che ha cambiato struttura.
+  Se il run non ha eseguito nessun passo, è GitHub che non ha trovato runner liberi
+  (vedi sotto).
+- **Un passo di Pages è rosso ma il run resta verde.** È voluto. I tre passi finali
+  (`Configura Pages`, `Carica la cartella docs`, `Pubblica su GitHub Pages`) sono marcati
+  `continue-on-error`, perché quando arrivano gli avvisi sono già stati mandati su
+  Telegram e lo stato è già stato committato: far fallire il run servirebbe solo a
+  mandarti una mail per un feed che verrà ripubblicato 15 minuti dopo. Se sono rossi per
+  giorni di fila, allora vale la pena guardarci: il feed RSS è fermo anche se il canale
+  è aggiornato.
 - **I run sono verdi ma sul canale non arriva niente.** Nel log cerca la riga
   `[OK] Telegram: inviati N/M avvisi`: se `N < M` qualche invio è stato rifiutato e verrà
   ritentato da solo al giro successivo.
 
-### Perché i timeout sono così stretti
+### Se GitHub non trova runner liberi
 
-Il job `build` ha `timeout-minutes: 8`, `deploy` ne ha 5, e `actions/deploy-pages` si
-arrende dopo 3 minuti. Non è pignoleria: nel caso peggiore un run dura 13 minuti, cioè
-meno dei 15 che passano fra un dispatch e l'altro. Se un run sfora, è ancora in corso
-quando arriva il successivo, che lo annulla — e da lì parte una catena in cui nessun run
-arriva più in fondo. È successo il 6 agosto 2026, quando le deployment di Pages restavano
-appese in `deployment_in_progress` per 10 minuti a botta. Se cambi la frequenza del cron
-esterno, ricontrolla che la somma dei timeout ci stia dentro.
+Capita che i job restino in coda senza che GitHub assegni loro una macchina
+(`The job was not acquired by Runner of type hosted even after multiple attempts`).
+È successo il pomeriggio del 6 agosto 2026, per ore: alcuni run partivano dopo 5 minuti,
+altri restavano fermi 15 minuti e venivano annullati dal dispatch successivo senza aver
+eseguito niente.
+
+**Attenzione: `timeout-minutes` non serve a niente in questo caso.** Conta solo il tempo
+di esecuzione, non quello passato in coda in attesa di un runner: un job può restare
+`queued` ben oltre il proprio timeout. Il tempo di coda lo decide GitHub, che dopo circa
+15 minuti si arrende da solo. Non c'è modo di accorciarlo dal workflow.
+
+La buona notizia è che non si perde niente: gli avvisi non mandati restano fuori da
+`state/seen.json` e partono al primo giro che riesce a girare. Un'ora di runner
+irraggiungibili si traduce in avvisi in ritardo, non in avvisi persi.
+
+Quello che si può fare è **chiedere meno macchine**. Per questo scraping e pubblicazione
+stanno in un unico job invece che in due: un job solo significa un solo runner da
+ottenere per giro, cioè metà delle occasioni di incappare nel problema. È il motivo per
+cui il job separato `deploy`, introdotto il 5 agosto, è stato riaccorpato il giorno dopo.
+
+Il `timeout-minutes` del job e il `timeout: 180000` passato a `actions/deploy-pages`
+servono invece per l'altro caso: quando il runner c'è ma il passo si impianta lo stesso,
+come le deployment di Pages che il 6 agosto restavano appese in `deployment_in_progress`
+per 10 minuti a botta.
 
 ### Rimandare avvisi persi
 
