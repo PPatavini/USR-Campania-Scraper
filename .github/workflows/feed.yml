@@ -74,9 +74,9 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     continue-on-error: true
-    # Deve chiudersi ben prima del dispatch successivo. Se resta appeso, il run
-    # e' ancora in corso quando arriva quello dopo, che lo annulla: e' cosi' che
-    # il 6 agosto 2026 si e' innescata la catena di run annullati.
+    # Limita il passo di deploy quando parte davvero. Non limita l'attesa di un
+    # runner libero: quella non e' governabile dal workflow, GitHub si arrende
+    # da solo dopo una quindicina di minuti.
     timeout-minutes: 5
     environment:
       name: github-pages

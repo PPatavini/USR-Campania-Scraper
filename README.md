@@ -123,15 +123,27 @@ Prima cosa da guardare: la scheda `Actions` del repo.
   `[OK] Telegram: inviati N/M avvisi`: se `N < M` qualche invio è stato rifiutato e verrà
   ritentato da solo al giro successivo.
 
-### Perché i timeout sono così stretti
+### Se GitHub non trova runner liberi
 
-Il job `build` ha `timeout-minutes: 8`, `deploy` ne ha 5, e `actions/deploy-pages` si
-arrende dopo 3 minuti. Non è pignoleria: nel caso peggiore un run dura 13 minuti, cioè
-meno dei 15 che passano fra un dispatch e l'altro. Se un run sfora, è ancora in corso
-quando arriva il successivo, che lo annulla — e da lì parte una catena in cui nessun run
-arriva più in fondo. È successo il 6 agosto 2026, quando le deployment di Pages restavano
-appese in `deployment_in_progress` per 10 minuti a botta. Se cambi la frequenza del cron
-esterno, ricontrolla che la somma dei timeout ci stia dentro.
+Capita che i job restino in coda senza che GitHub assegni loro una macchina
+(`The job was not acquired by Runner of type hosted even after multiple attempts`).
+È successo il pomeriggio del 6 agosto 2026, per ore: alcuni run partivano dopo 5 minuti,
+altri restavano fermi 15 minuti e venivano annullati dal dispatch successivo senza aver
+eseguito niente.
+
+**Attenzione: `timeout-minutes` non serve a niente in questo caso.** Conta solo il tempo
+di esecuzione, non quello passato in coda in attesa di un runner: un job può restare
+`queued` ben oltre il proprio timeout. Il tempo di coda lo decide GitHub, che dopo circa
+15 minuti si arrende da solo. Non c'è modo di accorciarlo dal workflow.
+
+La buona notizia è che non si perde niente: gli avvisi non mandati restano fuori da
+`state/seen.json` e partono al primo giro che riesce a girare. Un'ora di runner
+irraggiungibili si traduce in avvisi in ritardo, non in avvisi persi.
+
+I `timeout-minutes` (8 per `build`, 5 per `deploy`) e il `timeout: 180000` passato a
+`actions/deploy-pages` servono per l'altro caso: quando il runner c'è ma il passo si
+impianta lo stesso, come le deployment di Pages che il 6 agosto restavano appese in
+`deployment_in_progress` per 10 minuti a botta.
 
 ### Rimandare avvisi persi
 
