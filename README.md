@@ -72,31 +72,59 @@ aspetta il tempo richiesto da Telegram e riprova.
 
 ## Se il sito blocca le richieste (anti-bot)
 
-Il portale MIM a volte blocca le richieste automatiche. Se nei log dell'Action vedi un
-errore tipo `403` o "risposta troppo corta", sostituisci la funzione `fetch_html` in
-`scraper.py` con una versione che usa un browser headless (Playwright), che supera la
-maggior parte dei blocchi:
+Il portale MIM sta dietro ad Akamai, che può decidere di rifiutare le richieste che
+arrivano dai datacenter. È successo il **2 ottobre 2026 alle 11:00 UTC**: da un momento
+all'altro ogni richiesta dai runner GitHub ha iniziato a ricevere `403 Access Denied`.
 
-```python
-def fetch_html(url: str) -> str:
-    from playwright.sync_api import sync_playwright
-    with sync_playwright() as p:
-        browser = p.chromium.launch()
-        page = browser.new_page(locale="it-IT")
-        page.goto(url, wait_until="networkidle", timeout=60000)
-        html = page.content()
-        browser.close()
-    return html
-```
+**Non è un blocco aggirabile dal codice.** Verificato con un workflow di prova fatto
+girare su un runner GitHub, provando quattro strategie:
 
-E aggiungi al workflow, prima del run dello scraper:
+| Strategia | Esito |
+|---|---|
+| `requests` con gli header attuali | 403 |
+| `requests` con header di browser completi + cookie di sessione | 403 |
+| `curl_cffi` con impronta TLS di Chrome | 403 |
+| Playwright, Chromium headless vero | 403 |
 
-```yaml
-      - name: Installa Playwright
-        run: |
-          pip install playwright
-          python -m playwright install --with-deps chromium
-```
+Lo stesso 403 arriva su `robots.txt`, sulla homepage, sui vecchi domini `miur.gov.it` e
+`istruzione.it`. Akamai blocca **l'indirizzo IP**, non il travestimento del client: la
+richiesta non raggiunge nemmeno il sito. Anche i relay di lettura di terze parti
+(`r.jina.ai`, allorigins, codetabs) falliscono, segno che il blocco riguarda il traffico
+dai datacenter in generale, non solo GitHub.
+
+> Nelle versioni precedenti questo README consigliava di passare a Playwright. **Non
+> funziona**, ed è stato verificato sul campo: un browser headless vero prende 403 esatta-
+> mente come `requests`. Il consiglio è rimasto qui per mesi senza che nessuno lo provasse.
+
+### Cosa fa lo scraper quando è bloccato
+
+Riconosce il 403 come blocco anti-bot e **non fa fallire il run**: far fallire servirebbe
+solo a mandare una mail di errore ogni 15 minuti per qualcosa che non si può riparare da
+qui. Al suo posto:
+
+- stampa un `::warning::`, visibile nella scheda `Actions` e nel riepilogo del run;
+- annota in `state/seen.json` la chiave `bloccato_dal`, così si vede a colpo d'occhio se
+  dura da un'ora o da una settimana;
+- salta la pubblicazione su Pages (senza `docs/feed.xml` quei passi andrebbero in rosso);
+- **non perde niente**: gli avvisi non consegnati restano fuori dallo stato e partono tutti
+  al primo giro che riesce a leggere la pagina. Il marcatore `bloccato_dal` sparisce da solo.
+
+Un errore diverso (un `500`, la pagina che cambia struttura) continua invece a far fallire
+il run rumorosamente, perché quello sì che richiede un intervento.
+
+### Come tornare a leggere il sito
+
+Il blocco è sull'IP, quindi l'unica strada è farsi vedere da un indirizzo diverso:
+
+1. **Aspettare.** Le regole Akamai cambiano. Lo scraper continua a riprovare ogni 15
+   minuti e riparte da solo, recuperando gli arretrati. Costo zero, nessuna garanzia.
+2. **Un runner self-hosted** su una macchina di casa (anche un Raspberry Pi acceso).
+   L'IP residenziale non è bloccato. È la soluzione solida, ma vuole una macchina accesa.
+3. **Un proxy con IP residenziali italiani.** Funziona, costa, e aggiunge una dipendenza.
+
+Vale anche la pena **abbassare la frequenza**: 96 richieste al giorno sulla stessa pagina
+sono un profilo che un WAF nota. Una ogni 30-60 minuti dà gli stessi avvisi con un quarto
+del rumore.
 
 ## Se il canale Telegram smette di aggiornarsi
 

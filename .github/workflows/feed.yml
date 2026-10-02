@@ -71,11 +71,16 @@ jobs:
       # una mail di errore per un feed che viene ripubblicato 15 minuti dopo.
       # 'continue-on-error' va messo sui singoli passi: a livello di job non
       # basta, il run risulta 'failure' lo stesso (verificato sul run 2711).
+      # L'"if" salta la pubblicazione quando lo scraper non ha prodotto un feed,
+      # cioe' quando il sito MIM ci ha rifiutati: senza docs/feed.xml questi tre
+      # passi andrebbero in rosso a ogni giro per niente.
       - name: Configura Pages
+        if: hashFiles('docs/feed.xml') != ''
         continue-on-error: true
         uses: actions/configure-pages@v5
 
       - name: Carica la cartella docs
+        if: hashFiles('docs/feed.xml') != ''
         continue-on-error: true
         uses: actions/upload-pages-artifact@v3
         with:
@@ -83,6 +88,7 @@ jobs:
 
       - name: Pubblica su GitHub Pages
         id: deployment
+        if: hashFiles('docs/feed.xml') != ''
         continue-on-error: true
         uses: actions/deploy-pages@v4
         with:
