@@ -73,22 +73,41 @@ DATE_RE = re.compile(r"(\d{1,2})\s+(" + "|".join(MESI) + r")\s+(\d{4})", re.IGNO
 
 
 # --------------------------- Fetch + parsing -------------------------------
+class SitoBloccato(Exception):
+    """Il sito rifiuta le richieste (anti-bot). Non e' un errore nostro e non
+    ha senso farne fallire il run: non c'e' niente da riparare nel codice."""
+
+
+# Come si riconosce la pagina di cortesia di Akamai, che il MIM ha davanti.
+BLOCCO_MARCATORI = ("access denied", "errors.edgesuite.net", "akamaighost")
+
+
+def _e_un_blocco(resp) -> bool:
+    if resp.status_code in (403, 406, 429):
+        return True
+    testo = (resp.text or "")[:2000].lower()
+    return any(m in testo for m in BLOCCO_MARCATORI)
+
+
 def fetch_html(url: str) -> str:
-    motivo = ""
+    motivo, blocco = "", False
     for tentativo in range(1, FETCH_RETRIES + 1):
         try:
             resp = requests.get(url, headers=HEADERS, timeout=30)
         except requests.RequestException as e:
-            motivo = f"errore di rete ({e})"
+            motivo, blocco = f"errore di rete ({e})", False
         else:
             if resp.status_code == 200 and len(resp.text) >= 1000:
                 return resp.text
+            blocco = _e_un_blocco(resp)
             motivo = (f"HTTP {resp.status_code}" if resp.status_code != 200
                       else "risposta troppo corta (probabile pagina di blocco)")
         if tentativo < FETCH_RETRIES:
             attesa = 5 * tentativo
             print(f"[WARN] Lettura fallita: {motivo}. Riprovo tra {attesa}s.")
             time.sleep(attesa)
+    if blocco:
+        raise SitoBloccato(motivo)
     raise SystemExit(f"[ERRORE] Non riesco a leggere {url}: {motivo}. "
                      f"Se il blocco persiste vedi 'Se il sito blocca' nel README.")
 
@@ -162,6 +181,16 @@ def published_guids():
     return guids or None
 
 
+def _stato_raw():
+    """Contenuto grezzo del file di stato, {} se assente o illeggibile."""
+    try:
+        with open(STATE_FILE, encoding="utf-8") as f:
+            dati = json.load(f)
+        return dati if isinstance(dati, dict) else {"sent": dati}
+    except Exception:
+        return {}
+
+
 def load_state():
     """Avvisi gia' inviati. None = nessuno stato disponibile (primo avvio)."""
     if os.path.exists(STATE_FILE):
@@ -182,6 +211,13 @@ def load_state():
     return guids
 
 
+def _scrivi_stato(dati):
+    os.makedirs(os.path.dirname(STATE_FILE) or ".", exist_ok=True)
+    with open(STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(dati, f, ensure_ascii=False, indent=1)
+        f.write("\n")
+
+
 def save_state(guids):
     unici, visti = [], set()
     for g in guids:
@@ -189,10 +225,11 @@ def save_state(guids):
             visti.add(g)
             unici.append(g)
     unici = unici[-STATE_MAX:]
-    os.makedirs(os.path.dirname(STATE_FILE) or ".", exist_ok=True)
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump({"sent": unici}, f, ensure_ascii=False, indent=1)
-        f.write("\n")
+    dati = _stato_raw()
+    dati["sent"] = unici
+    # Se siamo arrivati fin qui il sito ha risposto: il blocco e' rientrato.
+    dati.pop("bloccato_dal", None)
+    _scrivi_stato(dati)
     print(f"[OK] Stato salvato in {STATE_FILE}: {len(unici)} avvisi.")
 
 
@@ -252,8 +289,52 @@ def handle_telegram(items, inviati):
     return consegnati
 
 
+def annuncia_blocco(motivo):
+    """Segnala il blocco senza far fallire il run.
+
+    Il sito che ci sbatte la porta in faccia non e' un guasto riparabile da qui:
+    far fallire il run servirebbe solo a mandare una mail ogni 15 minuti. Resta
+    un warning ben visibile nella scheda Actions, e nel file di stato si annota
+    da quando dura, cosi' si capisce se e' un capriccio di un'ora o una
+    settimana di silenzio.
+    """
+    adesso = dt.datetime.now(dt.timezone.utc)
+    dal = _stato_raw().get("bloccato_dal")
+    if not dal:
+        dal = adesso.isoformat(timespec="seconds")
+        dati = _stato_raw()
+        dati["bloccato_dal"] = dal
+        _scrivi_stato(dati)
+
+    try:
+        secondi = (adesso - dt.datetime.fromisoformat(dal)).total_seconds()
+        durata = f"da {int(secondi // 3600)}h {int(secondi % 3600 // 60)}m"
+    except Exception:
+        durata = "da poco"
+
+    msg = (f"Il sito MIM rifiuta le richieste ({motivo}): blocco anti-bot attivo "
+           f"{durata}, dal {dal}. Nessun avviso va perso: quelli non consegnati "
+           f"restano fuori da {STATE_FILE} e partono al primo giro che passa.")
+    print(f"[BLOCCO] {msg}")
+    print(f"::warning title=Sito MIM irraggiungibile::{msg}")
+
+    riepilogo = os.environ.get("GITHUB_STEP_SUMMARY")
+    if riepilogo:
+        try:
+            with open(riepilogo, "a", encoding="utf-8") as f:
+                f.write(f"### Sito MIM irraggiungibile\n\n{msg}\n")
+        except Exception:
+            pass
+
+
 def main():
-    items = extract_items(fetch_html(LIST_URL))
+    try:
+        html = fetch_html(LIST_URL)
+    except SitoBloccato as e:
+        annuncia_blocco(str(e))
+        return
+
+    items = extract_items(html)
     if not items:
         print("[ATTENZIONE] Nessuna notizia trovata. Controlla URL_PATTERN / struttura pagina.")
         sys.exit(1)
