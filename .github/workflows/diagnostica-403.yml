@@ -20,101 +20,53 @@ jobs:
           python-version: "3.12"
 
       - name: Installa gli strumenti di prova
-        run: pip install requests curl_cffi playwright
+        run: pip install requests
 
-      - name: Installa Chromium
-        run: python -m playwright install --with-deps chromium
-
-      - name: Prova le strategie di fetch
+      - name: Cerca una via d'accesso
         run: |
-          cat > probe.py <<'PY'
-          URL  = "https://www.mim.gov.it/web/miur-usr-campania/notizie"
-          HOME = "https://www.mim.gov.it/"
+          cat > probe2.py <<'PY'
+          import requests
 
-          def esito(nome, status, testo, headers=None):
-              ok = status == 200 and len(testo or "") > 1000
-              print(f"\n=== {nome} ===")
-              print(f"  status : {status}")
-              print(f"  lunghezza: {len(testo or '')}")
-              if headers:
-                  interessanti = {k: v for k, v in headers.items() if k.lower() in (
-                      "server", "cf-ray", "x-cache", "x-iinfo", "set-cookie",
-                      "x-akamai-transformed", "content-type")}
-                  print(f"  headers : {interessanti}")
-              if testo:
-                  print("  inizio  : " + " ".join(testo[:300].split()))
-              # Quante voci di notizia ci sono davvero nella pagina
-              if ok:
-                  print(f"  link notizia trovati: {(testo or '').count('/web/miur-usr-campania/-/')}")
-              print(f"  ESITO   : {'OK' if ok else 'BLOCCATO'}")
+          UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
+          PATTERN = "/web/miur-usr-campania/-/"
 
-          # --- A: esattamente quello che fa oggi lo scraper ---------------------
-          try:
-              import requests
-              H = {
-                  "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                                 "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
-                  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-                  "Accept-Language": "it-IT,it;q=0.9,en;q=0.8",
-                  "Referer": "https://www.mim.gov.it",
-              }
-              r = requests.get(URL, headers=H, timeout=30)
-              esito("A. requests, header attuali", r.status_code, r.text, r.headers)
-          except Exception as e:
-              print(f"\n=== A === eccezione: {e}")
+          def prova(nome, url, headers=None):
+              try:
+                  r = requests.get(url, headers={"User-Agent": UA, **(headers or {})},
+                                   timeout=45, allow_redirects=True)
+                  t = r.text or ""
+                  n = t.count(PATTERN)
+                  akamai = r.headers.get("Server", "")
+                  print(f"{nome:<52} {r.status_code:>4}  len={len(t):>7}  "
+                        f"link={n:>3}  server={akamai}  url={r.url[:70]}")
+                  return r.status_code, n, t
+              except Exception as e:
+                  print(f"{nome:<52}  ERR  {type(e).__name__}: {str(e)[:70]}")
+                  return 0, 0, ""
 
-          # --- B: requests con header di browser completi + cookie di sessione --
-          try:
-              import requests
-              H = {
-                  "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                                 "(KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"),
-                  "Accept": ("text/html,application/xhtml+xml,application/xml;q=0.9,"
-                             "image/avif,image/webp,image/apng,*/*;q=0.8"),
-                  "Accept-Language": "it-IT,it;q=0.9,en-US;q=0.8,en;q=0.7",
-                  "Accept-Encoding": "gzip, deflate, br",
-                  "sec-ch-ua": '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-                  "sec-ch-ua-mobile": "?0",
-                  "sec-ch-ua-platform": '"Windows"',
-                  "Sec-Fetch-Dest": "document",
-                  "Sec-Fetch-Mode": "navigate",
-                  "Sec-Fetch-Site": "none",
-                  "Sec-Fetch-User": "?1",
-                  "Upgrade-Insecure-Requests": "1",
-                  "Connection": "keep-alive",
-              }
-              s = requests.Session()
-              s.headers.update(H)
-              h = s.get(HOME, timeout=30)
-              print(f"\n[B] homepage: {h.status_code}, cookie raccolti: {len(s.cookies)}")
-              r = s.get(URL, timeout=30)
-              esito("B. requests, header completi + sessione", r.status_code, r.text, r.headers)
-          except Exception as e:
-              print(f"\n=== B === eccezione: {e}")
+          print("\n--- 1. Ampiezza del blocco sul dominio MIM ---")
+          prova("mim.gov.it robots.txt", "https://www.mim.gov.it/robots.txt")
+          prova("mim.gov.it homepage", "https://www.mim.gov.it/")
+          prova("mim.gov.it senza www", "https://mim.gov.it/")
+          prova("miur.gov.it (vecchio dominio)", "https://www.miur.gov.it/web/miur-usr-campania/notizie")
+          prova("istruzione.it (vecchio dominio)", "https://www.istruzione.it/web/miur-usr-campania/notizie")
 
-          # --- C: curl_cffi, impronta TLS di Chrome ----------------------------
-          try:
-              from curl_cffi import requests as creq
-              s = creq.Session(impersonate="chrome")
-              h = s.get(HOME, timeout=30)
-              print(f"\n[C] homepage: {h.status_code}")
-              r = s.get(URL, timeout=30)
-              esito("C. curl_cffi impersonate=chrome", r.status_code, r.text, dict(r.headers))
-          except Exception as e:
-              print(f"\n=== C === eccezione: {e}")
+          print("\n--- 2. Possibili RSS ufficiali Liferay ---")
+          for p in ("/web/miur-usr-campania/rss",
+                    "/rss/-/asset_publisher/rss",
+                    "/web/miur-usr-campania/notizie?p_p_id=101&p_p_lifecycle=2&p_p_resource_id=rss"):
+              prova(f"  {p[:46]}", "https://www.mim.gov.it" + p)
 
-          # --- D: browser vero, headless ---------------------------------------
-          try:
-              from playwright.sync_api import sync_playwright
-              with sync_playwright() as p:
-                  b = p.chromium.launch()
-                  pg = b.new_page(locale="it-IT")
-                  resp = pg.goto(URL, wait_until="domcontentloaded", timeout=60000)
-                  html = pg.content()
-                  esito("D. playwright chromium", resp.status if resp else 0, html,
-                        dict(resp.headers) if resp else None)
-                  b.close()
-          except Exception as e:
-              print(f"\n=== D === eccezione: {e}")
+          print("\n--- 3. Relay di lettura di terze parti ---")
+          TARGET = "https://www.mim.gov.it/web/miur-usr-campania/notizie"
+          st, n, t = prova("r.jina.ai", "https://r.jina.ai/" + TARGET)
+          if st == 200:
+              print("    estratto r.jina.ai: " + " ".join(t[:400].split()))
+          prova("allorigins raw", "https://api.allorigins.win/raw?url=" + TARGET)
+          prova("codetabs", "https://api.codetabs.com/v1/proxy?quest=" + TARGET)
+
+          print("\n--- 4. Cache pubbliche ---")
+          prova("Bing cache ricerca", "https://www.bing.com/search?q=site%3Amim.gov.it+miur-usr-campania+notizie")
           PY
-          python probe.py
+          python probe2.py
